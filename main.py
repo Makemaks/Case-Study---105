@@ -11,10 +11,15 @@ from models.random_forest import train_random_forest
 from models.svm import train_svm
 from models.naive_bayes import train_naive_bayes
 from sklearn.utils import check_array
+import joblib
 
 # Filepaths
 RAW_DATA_FILEPATH = "./data/train.csv"
 PROCESSED_DIR = "./data/processed/"
+MODEL_DIR = "./models/"
+
+# Ensure the model directory exists
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Check if processed data exists
 if all(os.path.exists(os.path.join(PROCESSED_DIR, f"{file}.csv")) for file in ["X_train", "X_test", "y_train", "y_test"]):
@@ -79,13 +84,31 @@ X_train_tfidf, y_train = smote.fit_resample(X_train_tfidf, y_train)
 print(f"After SMOTE - X_train_tfidf shape: {X_train_tfidf.shape}")
 print(f"After SMOTE - y_train shape: {y_train.shape}")
 
-# Step 6: Train models
-models = {
-    "Logistic Regression": train_logistic_regression(X_train_tfidf, y_train),
-    "Random Forest": train_random_forest(X_train_tfidf, y_train),
-    "Support Vector Machine": train_svm(X_train_tfidf, y_train),
-    "Naive Bayes": train_naive_bayes(X_train_tfidf, y_train),
+# Step 6: Train or Load Models
+models = {}
+MODEL_PATHS = {
+    "Logistic Regression": os.path.join(MODEL_DIR, "logistic_regression.pkl"),
+    "Random Forest": os.path.join(MODEL_DIR, "random_forest.pkl"),
+    "Support Vector Machine": os.path.join(MODEL_DIR, "svm.pkl"),
+    "Naive Bayes": os.path.join(MODEL_DIR, "naive_bayes.pkl"),
 }
+
+for model_name, model_path in MODEL_PATHS.items():
+    if os.path.exists(model_path):
+        print(f"Loading saved model: {model_name}...")
+        models[model_name] = joblib.load(model_path)
+    else:
+        print(f"Training {model_name}...")
+        if model_name == "Logistic Regression":
+            models[model_name] = train_logistic_regression(X_train_tfidf, y_train)
+        elif model_name == "Random Forest":
+            models[model_name] = train_random_forest(X_train_tfidf, y_train)
+        elif model_name == "Support Vector Machine":
+            models[model_name] = train_svm(X_train_tfidf, y_train)
+        elif model_name == "Naive Bayes":
+            models[model_name] = train_naive_bayes(X_train_tfidf, y_train)
+        # Save the trained model
+        joblib.dump(models[model_name], model_path)
 
 # Step 7: Evaluate models
 model_results = {}

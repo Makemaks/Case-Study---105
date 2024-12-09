@@ -1,16 +1,9 @@
 from sklearn.naive_bayes import MultinomialNB
+import joblib
 
 def train_naive_bayes(X_train, y_train):
-    """
-    Trains a Naive Bayes Classifier.
-
-    Args:
-        X_train: Training features (e.g., TF-IDF vectors).
-        y_train: Training labels.
-
-    Returns:
-        Trained Naive Bayes model.
-    """
+    """Train Naive Bayes and save the model."""
     model = MultinomialNB()
     model.fit(X_train, y_train)
+    joblib.dump(model, "./trained_models/naive_bayes.pkl")  # Save the model
     return model
