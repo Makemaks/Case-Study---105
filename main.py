@@ -16,7 +16,7 @@ import joblib
 # Filepaths
 RAW_DATA_FILEPATH = "./data/train.csv"
 PROCESSED_DIR = "./data/processed/"
-MODEL_DIR = "./models/"
+MODEL_DIR = "./trained_models/"
 
 # Ensure the model directory exists
 os.makedirs(MODEL_DIR, exist_ok=True)
