@@ -1,16 +1,16 @@
 from sklearn.svm import SVC
 import joblib
 
-def train_svm(X_train, y_train):
-    """Train SVM with verbose output and save the model."""
+def train_svm(X_train, y_train, save_path):
+    """Train SVM model and save it."""
     model = SVC(
         kernel='linear',
         C=0.1,
-        probability=True,
+        probability=True,  # For probability outputs
         random_state=42,
-        max_iter=5000,
+        max_iter=310,
         verbose=True
     )
     model.fit(X_train, y_train)
-    joblib.dump(model, "./trained_models/svm.pkl")  # Save the model
-    return model 
+    joblib.dump(model, save_path)  # Save model
+    return model

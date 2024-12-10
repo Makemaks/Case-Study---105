@@ -30,17 +30,33 @@ LABEL_MAPPING = {
     2: "Neutral (Non-Offensive)"
 }
 
+# Utility functions
 @st.cache_resource
 def load_data(file_path):
     """Loads dataset from a file."""
     data = pd.read_csv(file_path)
     return data
 
+@st.cache_resource
 def load_model_and_pipeline(model_name):
     """Loads the selected model and PCA pipeline."""
     model = joblib.load(MODEL_FILES[model_name])
     pca = joblib.load(PCA_FILE)
     return model, pca
+
+def sanitize_text_for_plotting(text):
+    """Sanitize text to avoid errors in plotting."""
+    if pd.isnull(text) or not isinstance(text, str):  # Handle null or non-string values
+        return ""
+    sanitized_text = (
+        text.replace("&", "&amp;")
+        .replace("$", "\\$")
+        .replace("@", "")
+        .replace("\n", " ")
+        .replace("\"", "")
+        .replace("\'", "")
+    )
+    return sanitized_text[:50]  # Limit text length for visualization
 
 def predict_text(model, pca, input_text):
     """Predicts the label for input text using the selected model."""
@@ -52,11 +68,16 @@ def predict_text(model, pca, input_text):
     return prediction[0], label_description
 
 # Streamlit App
-st.title("Exploratory Data Analysis & Prediction Dashboard")
-# st.sidebar.title("Navigation")
+st.title("Exploratory Data Analysis & Model Evaluation Dashboard")
 
 # Tabs for navigation
-tab1, tab2, tab3, tab4 = st.tabs(["Dataset Overview", "Visualizations", "Interactive Analysis", "Text Classification"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Dataset Overview", 
+    "Visualizations", 
+    "Interactive Analysis", 
+    "Model Comparison", 
+    "Text Classification"
+])
 
 # Tab 1: Dataset Overview
 with tab1:
@@ -81,7 +102,10 @@ with tab1:
 
     # Check for missing values
     st.subheader("Missing Values")
-    st.write(data.isnull().sum())
+    missing_values = data.isnull().sum()
+    st.write(missing_values)
+    if missing_values.any():
+        st.warning("Dataset contains missing values. Consider cleaning the data.")
 
 # Tab 2: Visualizations
 with tab2:
@@ -90,28 +114,38 @@ with tab2:
     # Heatmap for correlations
     st.subheader("Heatmap of Feature Correlations")
     numeric_columns = data.select_dtypes(include=[np.number])
-    correlation = numeric_columns.corr()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.heatmap(correlation, annot=True, cmap="coolwarm", ax=ax)
-    st.pyplot(fig)
+    if numeric_columns.empty:
+        st.warning("No numeric columns available for heatmap.")
+    else:
+        correlation = numeric_columns.corr()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(correlation, annot=True, cmap="coolwarm", ax=ax, fmt=".2f")
+        st.pyplot(fig)
 
     # Boxplot
     st.subheader("Boxplot for Numeric Features")
-    selected_column = st.selectbox("Select a Column for Boxplot", numeric_columns.columns)
-    fig, ax = plt.subplots()
-    sns.boxplot(data=data, y=selected_column, ax=ax)
-    st.pyplot(fig)
+    if not numeric_columns.empty:
+        selected_column = st.selectbox("Select a Column for Boxplot", numeric_columns.columns)
+        fig, ax = plt.subplots()
+        sns.boxplot(data=data, y=selected_column, ax=ax)
+        st.pyplot(fig)
+    else:
+        st.warning("No numeric columns available for boxplot.")
 
     # Bar Chart
     st.subheader("Bar Chart of Feature Distribution")
     categorical_columns = data.select_dtypes(include=[object])
-    selected_category = st.selectbox("Select a Categorical Column", categorical_columns.columns)
-    fig, ax = plt.subplots()
-    data[selected_category].value_counts().plot(kind="bar", ax=ax, color="skyblue")
-    ax.set_title(f"Distribution of {selected_category}")
-    ax.set_xlabel(selected_category)
-    ax.set_ylabel("Count")
-    st.pyplot(fig)
+    if not categorical_columns.empty:
+        selected_category = st.selectbox("Select a Categorical Column", categorical_columns.columns)
+        sanitized_data = data[selected_category].apply(sanitize_text_for_plotting)
+        fig, ax = plt.subplots()
+        sanitized_data.value_counts().plot(kind="bar", ax=ax, color="skyblue")
+        ax.set_title(f"Distribution of {selected_category}")
+        ax.set_xlabel(selected_category)
+        ax.set_ylabel("Count")
+        st.pyplot(fig)
+    else:
+        st.warning("No categorical columns available for bar chart.")
 
 # Tab 3: Interactive Analysis
 with tab3:
@@ -119,29 +153,44 @@ with tab3:
 
     # Scatter plot using Plotly
     st.subheader("Interactive Scatter Plot")
-    scatter_x = st.selectbox("Select X-Axis", data.columns)
-    scatter_y = st.selectbox("Select Y-Axis", data.columns)
-    scatter_color = st.selectbox("Select Color Feature", data.columns)
-    fig = px.scatter(data, x=scatter_x, y=scatter_y, color=scatter_color, title="Scatter Plot")
+    if data.shape[1] < 2:
+        st.warning("Not enough columns for scatter plot.")
+    else:
+        scatter_x = st.selectbox("Select X-Axis", data.columns)
+        scatter_y = st.selectbox("Select Y-Axis", data.columns)
+        scatter_color = st.selectbox("Select Color Feature", data.columns)
+
+        sanitized_data = data.copy()
+        sanitized_data[scatter_x] = sanitized_data[scatter_x].apply(sanitize_text_for_plotting)
+        sanitized_data[scatter_y] = sanitized_data[scatter_y].apply(sanitize_text_for_plotting)
+        sanitized_data[scatter_color] = sanitized_data[scatter_color].apply(sanitize_text_for_plotting)
+
+        fig = px.scatter(sanitized_data, x=scatter_x, y=scatter_y, color=scatter_color, title="Scatter Plot")
+        st.plotly_chart(fig)
+
+# Tab 4: Model Comparison
+with tab4:
+    st.header("Model Comparison")
+
+    st.subheader("Performance Metrics")
+    # Mocked metrics for demonstration (replace with actual evaluation results)
+    metrics = {
+        "Model": ["Logistic Regression", "Random Forest", "SVM", "Naive Bayes"],
+        "Accuracy": [0.85, 0.90, 0.87, 0.75],
+        "F1 Score": [0.83, 0.89, 0.85, 0.72],
+        "Precision": [0.84, 0.91, 0.86, 0.74],
+        "Recall": [0.82, 0.88, 0.84, 0.70]
+    }
+    df_metrics = pd.DataFrame(metrics)
+    st.dataframe(df_metrics)
+
+    # Bar chart for accuracy comparison
+    st.subheader("Accuracy Comparison")
+    fig = px.bar(df_metrics, x="Model", y="Accuracy", color="Model", title="Model Accuracy")
     st.plotly_chart(fig)
 
-    # Pairplot
-    st.subheader("Pairplot of Features")
-    pairplot_features = st.multiselect("Select Features for Pairplot", numeric_columns.columns)
-    if len(pairplot_features) > 1:
-        fig = sns.pairplot(data[pairplot_features])
-        st.pyplot(fig)
-
-    # Interactive Filter
-    st.subheader("Filter Dataset")
-    filter_column = st.selectbox("Select a Column to Filter", data.columns)
-    unique_values = data[filter_column].unique()
-    selected_values = st.multiselect(f"Select values of {filter_column} to display", unique_values)
-    filtered_data = data[data[filter_column].isin(selected_values)]
-    st.write(filtered_data)
-
-# Tab 4: Text Classification
-with tab4:
+# Tab 5: Text Classification
+with tab5:
     st.header("Text Classification")
 
     # Select Model

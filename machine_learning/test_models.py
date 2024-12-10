@@ -3,17 +3,27 @@ import joblib
 import numpy as np
 import torch
 from transformers import BertTokenizer, BertModel
-from utils.preprocessing import preprocess_text
 from utils.text_to_bert_embeddings import text_to_bert_embeddings
 
 # Filepaths
 TRAINED_MODELS_DIR = "./trained_models/"
 
+# Define model files
+MODEL_FILES = {
+    "Logistic Regression": os.path.join(TRAINED_MODELS_DIR, "logistic_regression.pkl"),
+    "Random Forest": os.path.join(TRAINED_MODELS_DIR, "random_forest.pkl"),
+    "Support Vector Machine": os.path.join(TRAINED_MODELS_DIR, "svm.pkl"),
+    "Naive Bayes": {
+        "model": os.path.join(TRAINED_MODELS_DIR, "naive_bayes.pkl"),
+        "scaler": os.path.join(TRAINED_MODELS_DIR, "naive_bayes_scaler.pkl"),
+    },
+}
+
 # Define label mapping
 label_mapping = {
     0: "Hate Speech",
     1: "Offensive Language",
-    2: "Neutral (Non-Offensive)"
+    2: "Neutral (Non-Offensive)",
 }
 
 # Confidence threshold
@@ -27,40 +37,69 @@ bert_model = BertModel.from_pretrained("bert-base-uncased")
 bert_model.to(device)
 bert_model.eval()
 
-# Hardcoded model selection
-selected_model_name = "Logistic Regression"
-selected_model_file = os.path.join(TRAINED_MODELS_DIR, "logistic_regression.pkl")
+# Load models
+print("\nLoading models...")
+models = {}
+for model_name, model_path in MODEL_FILES.items():
+    if model_name == "Naive Bayes":
+        # Load Naive Bayes model and scaler
+        models[model_name] = {
+            "model": joblib.load(model_path["model"]),
+            "scaler": joblib.load(model_path["scaler"]),
+        }
+    else:
+        # Load other models
+        models[model_name] = joblib.load(model_path)
 
-# Load the selected model
-print(f"\nLoading hardcoded model: {selected_model_name} from {selected_model_file}...")
-model = joblib.load(selected_model_file)
-
-# Test the selected model with manual input
+# Test all models with manual input
 while True:
     input_text = input("\nEnter text to classify (or type 'exit' to quit): ").strip()
     if input_text.lower() == "exit":
-        print(f"Exiting testing for {selected_model_name}...")
+        print("Exiting testing...")
         break
 
-    # Convert input text to BERT embeddings
-    input_embedding = text_to_bert_embeddings([input_text], tokenizer, bert_model, device)
-
-    # Reshape input for prediction
+    # Generate BERT embeddings for the input text
+    print("Generating BERT embedding for the input text...")
+    input_embedding = text_to_bert_embeddings([input_text], tokenizer, bert_model, device, batch_size=1)
     input_embedding = input_embedding.reshape(1, -1)
 
-    # Predict the label and calculate probabilities
-    predicted_label = model.predict(input_embedding)[0]
-    probabilities = model.predict_proba(input_embedding)[0]
-    confidence = probabilities[predicted_label]
+    print("\nResults for all models:")
+    for model_name, model_data in models.items():
+        try:
+            if model_name == "Naive Bayes":
+                # Scale the input for Naive Bayes
+                scaler = model_data["scaler"]
+                model = model_data["model"]
+                scaled_embedding = scaler.transform(input_embedding)
+                predicted_label = model.predict(scaled_embedding)[0]
+                probabilities = model.predict_proba(scaled_embedding)[0]
+            else:
+                model = model_data
+                predicted_label = model.predict(input_embedding)[0]
+                if hasattr(model, "predict_proba"):
+                    probabilities = model.predict_proba(input_embedding)[0]
+                else:
+                    probabilities = np.zeros(len(label_mapping))
+                    probabilities[predicted_label] = 1.0
 
-    if confidence < THRESHOLD:
-        print("\nLow confidence in prediction. Label may be ambiguous.")
-    else:
-        label_description = label_mapping.get(predicted_label, "Unknown")
-        print(f"\nPredicted label: {predicted_label} ({label_description})")
-        print(f"Confidence: {confidence * 100:.2f}%")
+            confidence = probabilities[predicted_label]
 
-    # Display class probabilities
-    print("\nClass Probabilities:")
-    for label, prob in enumerate(probabilities):
-        print(f"  {label_mapping[label]}: {prob:.2f}")
+            label_description = label_mapping.get(predicted_label, "Unknown")
+            result = (
+                f"Predicted Label: {predicted_label} ({label_description})\n"
+                f"Confidence: {confidence * 100:.2f}%"
+            )
+
+            # Add notice for low confidence
+            if confidence < THRESHOLD:
+                result += f"\nNotice: Low confidence ({confidence * 100:.2f}%) - Label may be ambiguous."
+
+            # Display class probabilities
+            result += "\nClass Probabilities:\n" + "\n".join(
+                [f"  {label_mapping[label]}: {prob:.2f}" for label, prob in enumerate(probabilities)]
+            )
+
+        except Exception as e:
+            result = f"Error during prediction: {e}"
+
+        print(f"\n{model_name}:\n{result}")

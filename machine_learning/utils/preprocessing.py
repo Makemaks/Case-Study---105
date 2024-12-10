@@ -1,20 +1,35 @@
-import re
-import nltk
-from nltk.corpus import stopwords
+import os
+import numpy as np
+import torch
+from transformers import BertTokenizer, BertModel
+from utils.text_to_bert_embeddings import text_to_bert_embeddings
 
-# Ensure necessary resources are downloaded
-nltk.download('stopwords')
-nltk.download('punkt')
+def preprocess_and_generate_embeddings(texts, embedding_file, batch_size=32, max_length=128):
+    """
+    Preprocess texts and generate BERT embeddings.
+    If embeddings are cached, load them instead.
+    
+    Args:
+        texts (list): List of text data.
+        embedding_file (str): Path to save/load embeddings.
+        batch_size (int): Batch size for embedding generation.
+        max_length (int): Max token length.
 
-stop_words = set(stopwords.words('english'))
-stop_words.add("rt")
-
-def preprocess_text(text):
-    """Cleans and preprocesses text data."""
-    text = re.sub(r"&[^\s;]+;", "", text)  # Remove HTML entities
-    text = re.sub(r"@[^ ]+", "user", text)  # Replace user mentions
-    text = re.sub(r"http\S+|www\S+|https\S+", "", text)  # Remove URLs
-    text = re.sub(r"[^a-zA-Z0-9\s]", "", text)  # Remove unnecessary symbols
-    tokens = nltk.word_tokenize(text)  # Tokenize with NLTK
-    tokens = [word.lower() for word in tokens if word.lower() not in stop_words]
-    return " ".join(tokens)
+    Returns:
+        np.ndarray: Generated embeddings.
+        tokenizer: BERT tokenizer.
+        bert_model: BERT model.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    bert_model = BertModel.from_pretrained("bert-base-uncased")
+    bert_model.to(device)
+    
+    if os.path.exists(embedding_file):
+        print("Loading precomputed embeddings...")
+        return np.load(embedding_file), tokenizer, bert_model
+    else:
+        print("Generating BERT embeddings...")
+        embeddings = text_to_bert_embeddings(texts, tokenizer, bert_model, device, batch_size, max_length)
+        np.save(embedding_file, embeddings)
+        return embeddings, tokenizer, bert_model

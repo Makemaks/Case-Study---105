@@ -1,15 +1,15 @@
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 
-def train_random_forest(X_train, y_train):
-    """Train Random Forest with verbose output and save the model."""
+def train_random_forest(X_train, y_train, save_path):
+    """Train Random Forest model and save it."""
     model = RandomForestClassifier(
-        n_estimators=100,    # Number of trees
-        random_state=42,     # Ensure reproducibility
-        max_depth=None,      # Grow trees until all leaves are pure
-        n_jobs=-1,           # Use all CPU cores
-        verbose=1            # Add verbose output
+        n_estimators=100,
+        random_state=42,
+        max_depth=None,
+        n_jobs=-1,
+        verbose=1
     )
     model.fit(X_train, y_train)
-    joblib.dump(model, "./trained_models/random_forest.pkl")  # Save the model
+    joblib.dump(model, save_path)  # Save model
     return model
