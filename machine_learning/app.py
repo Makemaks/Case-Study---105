@@ -7,6 +7,7 @@ import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
 import plotly.express as px
+from wordcloud import WordCloud
 from transformers import BertTokenizer, BertModel
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
@@ -36,6 +37,19 @@ LABEL_MAPPING = {
     1: "Offensive Language",
     2: "Neutral (Non-Offensive)"
 }
+
+# Evaluation function
+def evaluate_model(y_true, y_pred):
+    accuracy = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average='weighted')
+    precision = precision_score(y_true, y_pred, average='weighted')
+    recall = recall_score(y_true, y_pred, average='weighted')
+    return {
+        "accuracy": accuracy,
+        "f1_score": f1,
+        "precision": precision,
+        "recall": recall,
+    }
 
 def predict_with_all_models(input_text, models, tokenizer, bert_model, device):
     """Generates predictions for input text using all models."""
@@ -68,20 +82,7 @@ def predict_with_all_models(input_text, models, tokenizer, bert_model, device):
 
     return results
 
-# Evaluation function
-def evaluate_model(y_true, y_pred):
-    accuracy = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred, average='weighted')
-    precision = precision_score(y_true, y_pred, average='weighted')
-    recall = recall_score(y_true, y_pred, average='weighted')
-    return {
-        "accuracy": accuracy,
-        "f1_score": f1,
-        "precision": precision,
-        "recall": recall,
-    }
-
-# Initialize BERT model and tokenizer
+# Cache BERT model and tokenizer
 @st.cache_resource
 def initialize_bert():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,12 +92,13 @@ def initialize_bert():
     bert_model.eval()
     return tokenizer, bert_model, device
 
-# Utility functions
+# Cache dataset loading
 @st.cache_resource
 def load_data(file_path):
     data = pd.read_csv(file_path)
     return data['tweet'], data['class']
 
+# Cache model loading
 @st.cache_resource
 def load_model(model_name):
     if model_name == "Naive Bayes":
@@ -112,30 +114,24 @@ def load_all_models():
 
 # Preload all resources with progress bar
 progress = st.progress(0)
-
-# Step 1: Load data
 progress.text("Loading dataset...")
 tweets, labels = load_data(DATA_FILE)
 data = pd.DataFrame({"tweet": tweets, "label": labels})
 progress.progress(20)
 
-# Step 2: Initialize BERT
 progress.text("Initializing BERT...")
 tokenizer, bert_model, device = initialize_bert()
 progress.progress(40)
 
-# Step 3: Generate embeddings
 progress.text("Generating embeddings...")
 X, _, _ = preprocess_and_generate_embeddings(tweets, embedding_file=EMBEDDING_FILE, batch_size=32)
 _, X_test, _, y_test = train_test_split(X, labels, test_size=0.2, random_state=42)
 progress.progress(60)
 
-# Step 4: Load models
 progress.text("Loading models...")
 models = load_all_models()
 progress.progress(80)
 
-# Step 5: Evaluate models
 progress.text("Evaluating models...")
 predictions = {}
 scalers = {name: model_data["scaler"] for name, model_data in models.items() if isinstance(model_data, dict) and "scaler" in model_data}
@@ -158,7 +154,7 @@ for model_name, y_pred in predictions.items():
 progress.progress(100)
 progress.text("All resources loaded.")
 
-# Display the Streamlit App
+# Streamlit App
 st.title("Exploratory Data Analysis & Model Evaluation Dashboard")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -172,20 +168,103 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # Tab 1: Dataset Overview
 with tab1:
     st.header("Dataset Overview")
+
+    # Display label definitions
+    st.subheader("Label Definitions")
+    label_definitions = pd.DataFrame(
+        list(LABEL_MAPPING.items()), 
+        columns=["Label ID", "Definition"]
+    )
+    st.table(label_definitions)
+
+    # Display first few rows
     st.subheader("First Few Rows")
     st.write(data.head())
-    st.subheader("Summary Statistics")
-    st.write(data["label"].describe())
+
+    # Display class distribution
     st.subheader("Class Distribution")
-    st.bar_chart(data["label"].value_counts())
+    class_distribution = data["label"].value_counts().reset_index()
+    class_distribution.columns = ["Class", "Count"]
+    st.write(class_distribution)
+
+    # Basic Statistics
+    st.subheader("Basic Statistics")
+    if not data.empty:
+        # Compute statistics
+        basic_stats = {
+            "Statistic": ["Count", "Mean", "Standard Deviation", "Min", "25th Percentile", "50th Percentile (Median)", "75th Percentile", "Max"],
+            "Value": [
+                int(data["label"].count()),
+                round(data["label"].mean(), 4),
+                round(data["label"].std(), 4),
+                data["label"].min(),
+                data["label"].quantile(0.25),
+                data["label"].median(),
+                data["label"].quantile(0.75),
+                data["label"].max()
+            ]
+        }
+        stats_df = pd.DataFrame(basic_stats)
+        st.write(stats_df)
+
+    # Display missing values
+    st.subheader("Missing Values")
+    missing_values = data.isnull().sum().reset_index()
+    missing_values.columns = ["Column", "Missing Count"]
+    missing_values["Missing Percentage"] = (missing_values["Missing Count"] / len(data)) * 100
+    st.write(missing_values)
+
+    # Summary note
+    if missing_values["Missing Count"].sum() > 0:
+        st.warning("Some columns contain missing values. Consider cleaning the data.")
+    else:
+        st.success("No missing values detected.")
 
 # Tab 2: Visualizations
 with tab2:
     st.header("Visualizations")
+
+    # Pie chart for class distribution
     st.subheader("Class Distribution")
-    fig, ax = plt.subplots()
-    sns.countplot(data=data, x="label", ax=ax)
+    class_counts = data["label"].value_counts()
+    class_labels = [f"{LABEL_MAPPING[label]} ({label})" for label in class_counts.index]
+    fig_pie = px.pie(
+        values=class_counts.values,
+        names=class_labels,
+        title="Class Distribution",
+        hole=0.4,
+    )
+    st.plotly_chart(fig_pie)
+
+    # Normal curve for label distribution
+    st.subheader("Density and Histogram of Labels")
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot histogram of labels
+    sns.histplot(data["label"], kde=True, stat="density", bins=30, ax=ax, color="skyblue")
+
+    # Plot normal curve (KDE)
+    sns.kdeplot(data["label"], ax=ax, color="red", lw=2, label="KDE (Normal Curve)")
+
+    # Add labels and title
+    ax.set_title("Density and Histogram of Labels", fontsize=14)
+    ax.set_xlabel("Label", fontsize=12)
+    ax.set_ylabel("Density", fontsize=12)
+    ax.legend()
+
+    # Display the plot
     st.pyplot(fig)
+
+    st.subheader("Word Clouds for Each Class")
+    for label in class_counts.index:
+        st.write(f"Word Cloud for Label {label} ({LABEL_MAPPING[label]})")
+        text_data = " ".join(data[data["label"] == label]["tweet"])
+        wordcloud = WordCloud(width=800, height=400, background_color="white").generate(text_data)
+        fig_wc, ax_wc = plt.subplots(figsize=(10, 6))
+        ax_wc.imshow(wordcloud, interpolation="bilinear")
+        ax_wc.axis("off")
+        st.pyplot(fig_wc)
+
 
 # Tab 3: Interactive Analysis
 with tab3:
@@ -205,27 +284,9 @@ with tab4:
 
     # Visualize metrics with bar charts
     st.subheader("Performance Metrics Comparison")
-
-    # Accuracy
-    st.write("### Accuracy Comparison")
-    fig = px.bar(metrics_df, x="Model", y="Accuracy", color="Model", title="Accuracy Comparison")
-    st.plotly_chart(fig)
-
-    # F1 Score
-    st.write("### F1 Score Comparison")
-    fig = px.bar(metrics_df, x="Model", y="F1 Score", color="Model", title="F1 Score Comparison")
-    st.plotly_chart(fig)
-
-    # Precision
-    st.write("### Precision Comparison")
-    fig = px.bar(metrics_df, x="Model", y="Precision", color="Model", title="Precision Comparison")
-    st.plotly_chart(fig)
-
-    # Recall
-    st.write("### Recall Comparison")
-    fig = px.bar(metrics_df, x="Model", y="Recall", color="Model", title="Recall Comparison")
-    st.plotly_chart(fig)
-
+    for metric in ["Accuracy", "F1 Score", "Precision", "Recall"]:
+        fig = px.bar(metrics_df, x="Model", y=metric, color="Model", title=f"{metric} Comparison")
+        st.plotly_chart(fig)
 
 # Tab 5: Text Classification
 with tab5:
