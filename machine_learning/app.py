@@ -3,25 +3,36 @@ import joblib
 import streamlit as st
 import pandas as pd
 import numpy as np
+import torch
 import seaborn as sns
 import matplotlib.pyplot as plt
 import plotly.express as px
+from transformers import BertTokenizer, BertModel
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from utils.text_to_bert_embeddings import text_to_bert_embeddings
+from utils.data_loader import load_data
+from utils.preprocessing import preprocess_and_generate_embeddings
 
 # Filepaths
 DATA_FILE = "./data/train.csv"
 TRAINED_MODELS_DIR = "./trained_models/"
-TRAINED_PIPELINE_DIR = "./trained_pipeline/"
-
-# Define pipeline component files
-PCA_FILE = os.path.join(TRAINED_PIPELINE_DIR, "bert_pca.pkl")
+EMBEDDING_FILE = "./bert_embeddings.npy"
 
 # Define model files
 MODEL_FILES = {
     "Logistic Regression": os.path.join(TRAINED_MODELS_DIR, "logistic_regression.pkl"),
     "Random Forest": os.path.join(TRAINED_MODELS_DIR, "random_forest.pkl"),
     "Support Vector Machine": os.path.join(TRAINED_MODELS_DIR, "svm.pkl"),
-    "Naive Bayes": os.path.join(TRAINED_MODELS_DIR, "naive_bayes.pkl"),
+    "Naive Bayes": {
+        "model": os.path.join(TRAINED_MODELS_DIR, "naive_bayes.pkl"),
+        "scaler": os.path.join(TRAINED_MODELS_DIR, "naive_bayes_scaler.pkl"),
+    },
 }
+
+tweets, labels = load_data(DATA_FILE)
+data = pd.DataFrame({"tweet": tweets, "label": labels}) 
 
 # Define label mapping
 LABEL_MAPPING = {
@@ -30,42 +41,116 @@ LABEL_MAPPING = {
     2: "Neutral (Non-Offensive)"
 }
 
+# Evaluation function
+def evaluate_model(y_true, y_pred):
+    """Evaluate the model and return performance metrics."""
+    accuracy = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average='weighted')
+    precision = precision_score(y_true, y_pred, average='weighted')
+    recall = recall_score(y_true, y_pred, average='weighted')
+
+    return {
+        "accuracy": accuracy,
+        "f1_score": f1,
+        "precision": precision,
+        "recall": recall,
+    }
+
+# Initialize BERT model and tokenizer
+@st.cache_resource
+def initialize_bert():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    bert_model = BertModel.from_pretrained("bert-base-uncased")
+    bert_model.to(device)
+    bert_model.eval()
+    return tokenizer, bert_model, device
+
+tokenizer, bert_model, device = initialize_bert()
+
 # Utility functions
 @st.cache_resource
 def load_data(file_path):
     """Loads dataset from a file."""
     data = pd.read_csv(file_path)
-    return data
+    return data['tweet'], data['class']
 
 @st.cache_resource
-def load_model_and_pipeline(model_name):
-    """Loads the selected model and PCA pipeline."""
-    model = joblib.load(MODEL_FILES[model_name])
-    pca = joblib.load(PCA_FILE)
-    return model, pca
+def load_model(model_name):
+    """Loads the selected model."""
+    if model_name == "Naive Bayes":
+        return {
+            "model": joblib.load(MODEL_FILES["Naive Bayes"]["model"]),
+            "scaler": joblib.load(MODEL_FILES["Naive Bayes"]["scaler"]),
+        }
+    return joblib.load(MODEL_FILES[model_name])
 
-def sanitize_text_for_plotting(text):
-    """Sanitize text to avoid errors in plotting."""
-    if pd.isnull(text) or not isinstance(text, str):  # Handle null or non-string values
-        return ""
-    sanitized_text = (
-        text.replace("&", "&amp;")
-        .replace("$", "\\$")
-        .replace("@", "")
-        .replace("\n", " ")
-        .replace("\"", "")
-        .replace("\'", "")
-    )
-    return sanitized_text[:50]  # Limit text length for visualization
+def predict_with_all_models(input_text, models, tokenizer, bert_model, device):
+    """Generates predictions for input text using all models."""
+    input_embedding = text_to_bert_embeddings([input_text], tokenizer, bert_model, device, batch_size=1)
+    input_embedding = input_embedding.reshape(1, -1)
+    results = {}
 
-def predict_text(model, pca, input_text):
-    """Predicts the label for input text using the selected model."""
-    # Transform the input text
-    text_embedding = np.random.random((768,))  # Mock embedding (replace with actual pipeline)
-    reduced_embedding = pca.transform([text_embedding])
-    prediction = model.predict(reduced_embedding)
-    label_description = LABEL_MAPPING[prediction[0]]
-    return prediction[0], label_description
+    for model_name, model_data in models.items():
+        try:
+            if model_name == "Naive Bayes":
+                scaler = model_data["scaler"]
+                model = model_data["model"]
+                scaled_embedding = scaler.transform(input_embedding)
+                predicted_label = model.predict(scaled_embedding)[0]
+                probabilities = model.predict_proba(scaled_embedding)[0]
+            else:
+                model = model_data
+                predicted_label = model.predict(input_embedding)[0]
+                probabilities = model.predict_proba(input_embedding)[0] if hasattr(model, "predict_proba") else None
+
+            label_description = LABEL_MAPPING[predicted_label]
+            confidence = probabilities[predicted_label] if probabilities is not None else "N/A"
+            results[model_name] = {
+                "label": label_description,
+                "confidence": confidence,
+                "probabilities": probabilities,
+            }
+        except Exception as e:
+            results[model_name] = {"error": str(e)}
+
+    return results
+
+# Load all models
+@st.cache_resource
+def load_all_models():
+    """Loads all models."""
+    return {name: load_model(name) for name in MODEL_FILES}
+
+models = load_all_models()
+
+# Load and preprocess test data
+tweets, labels = load_data(DATA_FILE)
+X, _, _ = preprocess_and_generate_embeddings(tweets, embedding_file=EMBEDDING_FILE, batch_size=32)
+
+# Split data
+_, X_test, _, y_test = train_test_split(X, labels, test_size=0.2, random_state=42)
+
+# Generate predictions
+predictions = {}
+scalers = {name: model_data["scaler"] for name, model_data in models.items() if isinstance(model_data, dict) and "scaler" in model_data}
+
+for model_name, model_data in models.items():
+    try:
+        X_test_processed = X_test
+        if model_name == "Naive Bayes" and model_name in scalers:
+            X_test_processed = scalers[model_name].transform(X_test)
+        model = model_data["model"] if isinstance(model_data, dict) else model_data
+        predictions[model_name] = model.predict(X_test_processed)
+    except Exception as e:
+        predictions[model_name] = {"error": str(e)}
+
+# Evaluate models
+model_metrics = {}
+for model_name, y_pred in predictions.items():
+    if "error" not in y_pred:
+        metrics = evaluate_model(y_test, y_pred)
+        model_metrics[model_name] = metrics
 
 # Streamlit App
 st.title("Exploratory Data Analysis & Model Evaluation Dashboard")
@@ -82,27 +167,17 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # Tab 1: Dataset Overview
 with tab1:
     st.header("Dataset Overview")
+    tweets, labels = load_data(DATA_FILE)
 
-    # Load the data
-    data = load_data(DATA_FILE)
-
-    # Display first few rows
     st.subheader("First Few Rows")
-    st.write(data.head())
+    st.write(pd.DataFrame({"tweet": tweets, "label": labels}).head())
 
-    # Display dataset info
-    st.subheader("Dataset Information")
-    buffer = st.empty()
-    data_info = data.info(buf=buffer)
-    st.text(buffer._value)
-
-    # Generate summary statistics
     st.subheader("Summary Statistics")
-    st.write(data.describe())
+    st.write(labels.describe())
 
-    # Check for missing values
-    st.subheader("Missing Values")
-    missing_values = data.isnull().sum()
+    st.subheader("Class Distribution")
+    st.bar_chart(labels.value_counts())
+    missing_values = tweets.isnull().sum()
     st.write(missing_values)
     if missing_values.any():
         st.warning("Dataset contains missing values. Consider cleaning the data.")
@@ -110,102 +185,72 @@ with tab1:
 # Tab 2: Visualizations
 with tab2:
     st.header("Visualizations")
-
-    # Heatmap for correlations
-    st.subheader("Heatmap of Feature Correlations")
     numeric_columns = data.select_dtypes(include=[np.number])
-    if numeric_columns.empty:
-        st.warning("No numeric columns available for heatmap.")
-    else:
+    if not numeric_columns.empty:
         correlation = numeric_columns.corr()
         fig, ax = plt.subplots(figsize=(10, 6))
         sns.heatmap(correlation, annot=True, cmap="coolwarm", ax=ax, fmt=".2f")
         st.pyplot(fig)
-
-    # Boxplot
-    st.subheader("Boxplot for Numeric Features")
-    if not numeric_columns.empty:
-        selected_column = st.selectbox("Select a Column for Boxplot", numeric_columns.columns)
-        fig, ax = plt.subplots()
-        sns.boxplot(data=data, y=selected_column, ax=ax)
-        st.pyplot(fig)
     else:
-        st.warning("No numeric columns available for boxplot.")
-
-    # Bar Chart
-    st.subheader("Bar Chart of Feature Distribution")
-    categorical_columns = data.select_dtypes(include=[object])
-    if not categorical_columns.empty:
-        selected_category = st.selectbox("Select a Categorical Column", categorical_columns.columns)
-        sanitized_data = data[selected_category].apply(sanitize_text_for_plotting)
-        fig, ax = plt.subplots()
-        sanitized_data.value_counts().plot(kind="bar", ax=ax, color="skyblue")
-        ax.set_title(f"Distribution of {selected_category}")
-        ax.set_xlabel(selected_category)
-        ax.set_ylabel("Count")
-        st.pyplot(fig)
-    else:
-        st.warning("No categorical columns available for bar chart.")
+        st.warning("No numeric columns available for visualization.")
 
 # Tab 3: Interactive Analysis
 with tab3:
     st.header("Interactive Analysis")
-
-    # Scatter plot using Plotly
-    st.subheader("Interactive Scatter Plot")
-    if data.shape[1] < 2:
-        st.warning("Not enough columns for scatter plot.")
-    else:
+    if data.shape[1] >= 2:
         scatter_x = st.selectbox("Select X-Axis", data.columns)
         scatter_y = st.selectbox("Select Y-Axis", data.columns)
         scatter_color = st.selectbox("Select Color Feature", data.columns)
-
-        sanitized_data = data.copy()
-        sanitized_data[scatter_x] = sanitized_data[scatter_x].apply(sanitize_text_for_plotting)
-        sanitized_data[scatter_y] = sanitized_data[scatter_y].apply(sanitize_text_for_plotting)
-        sanitized_data[scatter_color] = sanitized_data[scatter_color].apply(sanitize_text_for_plotting)
-
-        fig = px.scatter(sanitized_data, x=scatter_x, y=scatter_y, color=scatter_color, title="Scatter Plot")
+        fig = px.scatter(data, x=scatter_x, y=scatter_y, color=scatter_color, title="Scatter Plot")
         st.plotly_chart(fig)
+    else:
+        st.warning("Not enough columns for scatter plot.")
 
 # Tab 4: Model Comparison
 with tab4:
     st.header("Model Comparison")
 
-    st.subheader("Performance Metrics")
-    # Mocked metrics for demonstration (replace with actual evaluation results)
-    metrics = {
-        "Model": ["Logistic Regression", "Random Forest", "SVM", "Naive Bayes"],
-        "Accuracy": [0.85, 0.90, 0.87, 0.75],
-        "F1 Score": [0.83, 0.89, 0.85, 0.72],
-        "Precision": [0.84, 0.91, 0.86, 0.74],
-        "Recall": [0.82, 0.88, 0.84, 0.70]
-    }
-    df_metrics = pd.DataFrame(metrics)
-    st.dataframe(df_metrics)
+    # Display metrics in a table
+    st.subheader("Performance Metrics Table")
+    metrics_df = pd.DataFrame(model_metrics).T.reset_index()
+    metrics_df.columns = ["Model", "Accuracy", "F1 Score", "Precision", "Recall"]
+    st.dataframe(metrics_df)
 
-    # Bar chart for accuracy comparison
-    st.subheader("Accuracy Comparison")
-    fig = px.bar(df_metrics, x="Model", y="Accuracy", color="Model", title="Model Accuracy")
+    # Visualize metrics with bar charts
+    st.subheader("Performance Metrics Comparison")
+
+    # Accuracy
+    st.write("### Accuracy Comparison")
+    fig = px.bar(metrics_df, x="Model", y="Accuracy", color="Model", title="Accuracy Comparison")
+    st.plotly_chart(fig)
+
+    # F1 Score
+    st.write("### F1 Score Comparison")
+    fig = px.bar(metrics_df, x="Model", y="F1 Score", color="Model", title="F1 Score Comparison")
+    st.plotly_chart(fig)
+
+    # Precision
+    st.write("### Precision Comparison")
+    fig = px.bar(metrics_df, x="Model", y="Precision", color="Model", title="Precision Comparison")
+    st.plotly_chart(fig)
+
+    # Recall
+    st.write("### Recall Comparison")
+    fig = px.bar(metrics_df, x="Model", y="Recall", color="Model", title="Recall Comparison")
     st.plotly_chart(fig)
 
 # Tab 5: Text Classification
+
 with tab5:
     st.header("Text Classification")
-
-    # Select Model
-    st.subheader("Select Model")
-    selected_model_name = st.selectbox("Choose a Model", list(MODEL_FILES.keys()))
-    model, pca = load_model_and_pipeline(selected_model_name)
-
-    # Input Text
-    st.subheader("Enter Text to Classify")
     input_text = st.text_input("Input Text", "")
 
     if input_text:
-        # Predict
-        predicted_label, label_description = predict_text(model, pca, input_text)
-
-        # Display Result
-        st.subheader("Prediction Result")
-        st.write(f"Predicted Label: **{predicted_label} ({label_description})**")
+        predictions = predict_with_all_models(input_text, models, tokenizer, bert_model, device)
+        for model_name, result in predictions.items():
+            if "error" in result:
+                st.error(f"{model_name}: {result['error']}")
+            else:
+                st.write(f"**{model_name}**")
+                st.write(f"- Predicted Label: {result['label']}")
+                st.write(f"- Confidence: {result['confidence'] * 100:.2f}%")

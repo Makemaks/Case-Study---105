@@ -1,8 +1,5 @@
 import os
-import numpy as np
 import joblib
-import torch
-from transformers import BertTokenizer, BertModel
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 from utils.data_loader import load_data
