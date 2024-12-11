@@ -31,59 +31,11 @@ MODEL_FILES = {
     },
 }
 
-tweets, labels = load_data(DATA_FILE)
-data = pd.DataFrame({"tweet": tweets, "label": labels}) 
-
-# Define label mapping
 LABEL_MAPPING = {
     0: "Hate Speech",
     1: "Offensive Language",
     2: "Neutral (Non-Offensive)"
 }
-
-# Evaluation function
-def evaluate_model(y_true, y_pred):
-    """Evaluate the model and return performance metrics."""
-    accuracy = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred, average='weighted')
-    precision = precision_score(y_true, y_pred, average='weighted')
-    recall = recall_score(y_true, y_pred, average='weighted')
-
-    return {
-        "accuracy": accuracy,
-        "f1_score": f1,
-        "precision": precision,
-        "recall": recall,
-    }
-
-# Initialize BERT model and tokenizer
-@st.cache_resource
-def initialize_bert():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    bert_model = BertModel.from_pretrained("bert-base-uncased")
-    bert_model.to(device)
-    bert_model.eval()
-    return tokenizer, bert_model, device
-
-tokenizer, bert_model, device = initialize_bert()
-
-# Utility functions
-@st.cache_resource
-def load_data(file_path):
-    """Loads dataset from a file."""
-    data = pd.read_csv(file_path)
-    return data['tweet'], data['class']
-
-@st.cache_resource
-def load_model(model_name):
-    """Loads the selected model."""
-    if model_name == "Naive Bayes":
-        return {
-            "model": joblib.load(MODEL_FILES["Naive Bayes"]["model"]),
-            "scaler": joblib.load(MODEL_FILES["Naive Bayes"]["scaler"]),
-        }
-    return joblib.load(MODEL_FILES[model_name])
 
 def predict_with_all_models(input_text, models, tokenizer, bert_model, device):
     """Generates predictions for input text using all models."""
@@ -116,22 +68,75 @@ def predict_with_all_models(input_text, models, tokenizer, bert_model, device):
 
     return results
 
-# Load all models
+# Evaluation function
+def evaluate_model(y_true, y_pred):
+    accuracy = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average='weighted')
+    precision = precision_score(y_true, y_pred, average='weighted')
+    recall = recall_score(y_true, y_pred, average='weighted')
+    return {
+        "accuracy": accuracy,
+        "f1_score": f1,
+        "precision": precision,
+        "recall": recall,
+    }
+
+# Initialize BERT model and tokenizer
+@st.cache_resource
+def initialize_bert():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    bert_model = BertModel.from_pretrained("bert-base-uncased")
+    bert_model.to(device)
+    bert_model.eval()
+    return tokenizer, bert_model, device
+
+# Utility functions
+@st.cache_resource
+def load_data(file_path):
+    data = pd.read_csv(file_path)
+    return data['tweet'], data['class']
+
+@st.cache_resource
+def load_model(model_name):
+    if model_name == "Naive Bayes":
+        return {
+            "model": joblib.load(MODEL_FILES["Naive Bayes"]["model"]),
+            "scaler": joblib.load(MODEL_FILES["Naive Bayes"]["scaler"]),
+        }
+    return joblib.load(MODEL_FILES[model_name])
+
 @st.cache_resource
 def load_all_models():
-    """Loads all models."""
     return {name: load_model(name) for name in MODEL_FILES}
 
-models = load_all_models()
+# Preload all resources with progress bar
+progress = st.progress(0)
 
-# Load and preprocess test data
+# Step 1: Load data
+progress.text("Loading dataset...")
 tweets, labels = load_data(DATA_FILE)
+data = pd.DataFrame({"tweet": tweets, "label": labels})
+progress.progress(20)
+
+# Step 2: Initialize BERT
+progress.text("Initializing BERT...")
+tokenizer, bert_model, device = initialize_bert()
+progress.progress(40)
+
+# Step 3: Generate embeddings
+progress.text("Generating embeddings...")
 X, _, _ = preprocess_and_generate_embeddings(tweets, embedding_file=EMBEDDING_FILE, batch_size=32)
-
-# Split data
 _, X_test, _, y_test = train_test_split(X, labels, test_size=0.2, random_state=42)
+progress.progress(60)
 
-# Generate predictions
+# Step 4: Load models
+progress.text("Loading models...")
+models = load_all_models()
+progress.progress(80)
+
+# Step 5: Evaluate models
+progress.text("Evaluating models...")
 predictions = {}
 scalers = {name: model_data["scaler"] for name, model_data in models.items() if isinstance(model_data, dict) and "scaler" in model_data}
 
@@ -145,73 +150,55 @@ for model_name, model_data in models.items():
     except Exception as e:
         predictions[model_name] = {"error": str(e)}
 
-# Evaluate models
 model_metrics = {}
 for model_name, y_pred in predictions.items():
     if "error" not in y_pred:
         metrics = evaluate_model(y_test, y_pred)
         model_metrics[model_name] = metrics
+progress.progress(100)
+progress.text("All resources loaded.")
 
-# Streamlit App
+# Display the Streamlit App
 st.title("Exploratory Data Analysis & Model Evaluation Dashboard")
 
-# Tabs for navigation
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Dataset Overview", 
-    "Visualizations", 
-    "Interactive Analysis", 
-    "Model Comparison", 
+    "Dataset Overview",
+    "Visualizations",
+    "Interactive Analysis",
+    "Model Comparison",
     "Text Classification"
 ])
 
 # Tab 1: Dataset Overview
 with tab1:
     st.header("Dataset Overview")
-    tweets, labels = load_data(DATA_FILE)
-
     st.subheader("First Few Rows")
-    st.write(pd.DataFrame({"tweet": tweets, "label": labels}).head())
-
+    st.write(data.head())
     st.subheader("Summary Statistics")
-    st.write(labels.describe())
-
+    st.write(data["label"].describe())
     st.subheader("Class Distribution")
-    st.bar_chart(labels.value_counts())
-    missing_values = tweets.isnull().sum()
-    st.write(missing_values)
-    if missing_values.any():
-        st.warning("Dataset contains missing values. Consider cleaning the data.")
+    st.bar_chart(data["label"].value_counts())
 
 # Tab 2: Visualizations
 with tab2:
     st.header("Visualizations")
-    numeric_columns = data.select_dtypes(include=[np.number])
-    if not numeric_columns.empty:
-        correlation = numeric_columns.corr()
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.heatmap(correlation, annot=True, cmap="coolwarm", ax=ax, fmt=".2f")
-        st.pyplot(fig)
-    else:
-        st.warning("No numeric columns available for visualization.")
+    st.subheader("Class Distribution")
+    fig, ax = plt.subplots()
+    sns.countplot(data=data, x="label", ax=ax)
+    st.pyplot(fig)
 
 # Tab 3: Interactive Analysis
 with tab3:
     st.header("Interactive Analysis")
-    if data.shape[1] >= 2:
-        scatter_x = st.selectbox("Select X-Axis", data.columns)
-        scatter_y = st.selectbox("Select Y-Axis", data.columns)
-        scatter_color = st.selectbox("Select Color Feature", data.columns)
-        fig = px.scatter(data, x=scatter_x, y=scatter_y, color=scatter_color, title="Scatter Plot")
-        st.plotly_chart(fig)
-    else:
-        st.warning("Not enough columns for scatter plot.")
+    scatter_x = st.selectbox("Select X-Axis", data.columns)
+    scatter_y = st.selectbox("Select Y-Axis", data.columns)
+    fig = px.scatter(data, x=scatter_x, y=scatter_y, title="Scatter Plot")
+    st.plotly_chart(fig)
 
 # Tab 4: Model Comparison
 with tab4:
     st.header("Model Comparison")
-
-    # Display metrics in a table
-    st.subheader("Performance Metrics Table")
+    st.subheader("Performance Metrics")
     metrics_df = pd.DataFrame(model_metrics).T.reset_index()
     metrics_df.columns = ["Model", "Accuracy", "F1 Score", "Precision", "Recall"]
     st.dataframe(metrics_df)
@@ -239,12 +226,11 @@ with tab4:
     fig = px.bar(metrics_df, x="Model", y="Recall", color="Model", title="Recall Comparison")
     st.plotly_chart(fig)
 
-# Tab 5: Text Classification
 
+# Tab 5: Text Classification
 with tab5:
     st.header("Text Classification")
     input_text = st.text_input("Input Text", "")
-
     if input_text:
         predictions = predict_with_all_models(input_text, models, tokenizer, bert_model, device)
         for model_name, result in predictions.items():
