@@ -160,7 +160,7 @@ st.title("Exploratory Data Analysis & Model Evaluation Dashboard")
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Dataset Overview",
     "Visualizations",
-    "Interactive Analysis",
+    "Documentation",
     "Model Comparison",
     "Text Classification"
 ])
@@ -265,14 +265,55 @@ with tab2:
         ax_wc.axis("off")
         st.pyplot(fig_wc)
 
-
-# Tab 3: Interactive Analysis
+# Tab 3: Dataset Documentation and Training/Testing Process
 with tab3:
-    st.header("Interactive Analysis")
-    scatter_x = st.selectbox("Select X-Axis", data.columns)
-    scatter_y = st.selectbox("Select Y-Axis", data.columns)
-    fig = px.scatter(data, x=scatter_x, y=scatter_y, title="Scatter Plot")
-    st.plotly_chart(fig)
+    st.header("Dataset Documentation")
+
+    st.markdown("""
+    ### Dataset Description
+    - **Filepath**: `./data/train.csv`
+    - **Columns**:
+        - `tweet`: Contains the text data (tweets).
+        - `label`: Contains numerical labels for classification.
+          - 0: Hate Speech
+          - 1: Offensive Language
+          - 2: Neutral (Non-Offensive)
+    ### Preprocessing Steps
+    1. BERT embeddings were generated for the tweets using `text_to_bert_embeddings`.
+    2. Data was split into training, validation, and testing sets (80%-10%-10%).
+    3. Class imbalance was handled using **SMOTE**.
+
+    ### Example Data
+    | tweet                                      | label |
+    |--------------------------------------------|-------|
+    | "I hate this so much!"                     | 0     |
+    | "This is offensive to many people!"        | 1     |
+    | "I think this is a normal discussion."     | 2     |
+    """)
+
+    st.header("Training and Testing Process")
+    st.markdown("""
+    ### Training Process
+    - **Models Used**:
+        1. Logistic Regression
+        2. Random Forest
+        3. Support Vector Machine (SVM)
+        4. Naive Bayes
+    - **Early Stopping**:
+        - Applied to Logistic Regression to stop training after 10 epochs without improvement.
+    - **Hyperparameter Tuning**:
+        - Regularization strength (`C`) for Logistic Regression and SVM.
+        - Number of estimators (`n_estimators`) for Random Forest.
+
+    ### Testing Process
+    - Metrics Calculated:
+        - Accuracy
+        - F1 Score
+        - Precision
+        - Recall
+    - Each model's performance was evaluated on the test set, and results were logged.
+    """)
+        
 
 # Tab 4: Model Comparison
 with tab4:
